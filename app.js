@@ -1,174 +1,125 @@
-/*
- * app.js: simple BLE connect application
- *
- * This application uses Web Bluetooth API.
- * Supporting OS and browsers are listed in the link below.
- * https://github.com/WebBluetoothCG/web-bluetooth/blob/master/implementation-status.md
- */
-
-const textDeviceName = document.getElementById('textDeviceName');
-const textUniqueName = document.getElementById('textUniqueName');
-const textDateTime = document.getElementById('textDateTime');
-const textTemp = document.getElementById('textTemp');
-const textHumid = document.getElementById('textHumid');
-const textIllum = document.getElementById('textIllum');
-const textTilt = document.getElementById('textTilt');
-const textBatt = document.getElementById('textBatt');
-const textDice = document.getElementById('textDice');
-
+const fields = Object.fromEntries(
+  ['DeviceName', 'UniqueName', 'DateTime', 'Temp', 'Humid', 'Illum', 'Tilt', 'Batt', 'Dice']
+    .map(name => [name, document.getElementById('text' + name)])
+);
 const buttonConnect = document.getElementById('ble-connect-button');
 const buttonDisconnect = document.getElementById('ble-disconnect-button');
 const buttonLedPls = document.getElementById('button-led-pls');
 const buttonLedMns = document.getElementById('button-led-mns');
-const buttonDownload = document.getElementById("button-download");
-
-const switchSleepMode = document.getElementById('sleepmode-switch');
-
-let leafony;
-
-// array of received data
-let savedData = [];
-// length of savedData
+const buttonDownload = document.getElementById('button-download');
+const connectionStatus = document.getElementById('connection-status');
+const connectionHelp = document.getElementById('connection-help');
 const CSV_BUFF_LEN = 1024;
+const savedData = [];
+let leafony = null;
+let connecting = false;
 
-
-window.onload = function () {
-
-	clearTable();
-
-};
-
-
-buttonConnect.addEventListener( 'click', function () {
-
-	leafony = new Leafony();
-	leafony.onStateChange( function ( state ) {
-		updateTable( state );
-	} );
-
-	if ( switchSleepMode.checked ) {
-		leafony.enableSleep();
-	} else {
-		leafony.disableSleep();
-	}
-
-	leafony.connect();
-
-	buttonConnect.style.display = 'none';
-	buttonDisconnect.style.display = '';
-
-
-} );
-
-
-buttonDisconnect.addEventListener( 'click', function () {
-
-	leafony.disconnect();
-	leafony = null;
-
-	clearTable();
-	buttonConnect.style.display = '';
-	buttonDisconnect.style.display = 'none';
-
-} );
-
-
-function clearTable () {
-
-	textDeviceName.innerHTML = '';
-	textUniqueName.innerHTML = '';
-	textDateTime.innerHTML = '';
-	textTemp.innerHTML = '';
-	textHumid.innerHTML = '';
-	textIllum.innerHTML = '';
-	textTilt.innerHTML = '';
-	textBatt.innerHTML = '';
-	textDice.innerHTML = '';
-
+function setConnection(connected, message) {
+  buttonConnect.style.display = connected ? 'none' : '';
+  buttonDisconnect.style.display = connected ? '' : 'none';
+  buttonLedPls.disabled = !connected;
+  buttonLedMns.disabled = !connected;
+  connectionStatus.textContent = message;
 }
 
-
-function updateTable ( state ) {
-	let date = new Date();
-	let year     = String( date.getFullYear() );
-	let month    = ( '00' + ( date.getMonth() + 1 ) ).slice( -2 );
-	let day      = ( '00' + date.getDate() ).slice( -2 );
-	let hours    = ( '00' + date.getHours() ).slice( -2 );
-	let minutes  = ( '00' + date.getMinutes() ).slice( -2 );
-	let seconds  = ( '00' + date.getSeconds() ).slice( -2 );
-	let datetime = year + '/' + month + '/' + day + ' ' +
-				   hours + ':' + minutes + ':' + seconds;
-
-	textDeviceName.innerText = state.devn;
-	textUniqueName.innerText = state.unin;
-	textDateTime.innerText = datetime;
-	textTemp.innerText = state.temp;
-	textHumid.innerText = state.humd;
-	textIllum.innerText = state.illm;
-	textTilt.innerText = state.tilt;
-	textBatt.innerText = state.batt;
-	textDice.innerText = state.dice;
-
-	// Create array of reveived data and sensors data
-	let darray = new Array(
-		datetime,
-		state.devn,
-		state.unin,
-		state.temp,
-		state.humd,
-		state.illm,
-		state.tilt,
-		state.batt,
-		state.dice);
-
-	// stack reveived data up to CSV_BUFF_LEN
-	if (savedData.length >= CSV_BUFF_LEN) {
-		savedData.shift();
-	}
-	savedData.push( darray );
+function updateTable(state) {
+  const date = new Date();
+  const pad = value => String(value).padStart(2, '0');
+  const datetime = date.getFullYear() + '/' + pad(date.getMonth() + 1) + '/' + pad(date.getDate()) +
+    ' ' + pad(date.getHours()) + ':' + pad(date.getMinutes()) + ':' + pad(date.getSeconds());
+  const values = {
+    DeviceName: state.devn, UniqueName: state.unin, DateTime: datetime,
+    Temp: state.temp, Humid: state.humd, Illum: state.illm,
+    Tilt: state.tilt, Batt: state.batt, Dice: state.dice
+  };
+  for (const [name, value] of Object.entries(values)) {
+    fields[name].textContent = value === undefined || value === '' ? '—' : value;
+  }
+  if (savedData.length >= CSV_BUFF_LEN) savedData.shift();
+  savedData.push([datetime, state.devn, state.unin, state.temp, state.humd,
+    state.illm, state.tilt, state.batt, state.dice]);
+  buttonDownload.disabled = false;
+  connectionStatus.textContent = '測定値を受信しています';
+  connectionHelp.textContent = '温度や湿度の値が表示されたら、最初の動作確認は完了です。';
 }
 
-
-buttonLedPls.addEventListener ( 'click', function () {
-
-	console.log( 'LED Plus Button Clicked' );
-	leafony.sendCommand( 'PLS' );
-
+buttonConnect.addEventListener('click', async () => {
+  if (connecting || leafony) return;
+  connecting = true;
+  buttonConnect.disabled = true;
+  connectionStatus.textContent = '接続先を選んでいます';
+  connectionHelp.textContent = '一覧からLeafony_AC02を選び、ペア設定を進めてください。';
+  const client = new Leafony();
+  let disconnectedDuringConnect = false;
+  leafony = client;
+  client.disableSleep();
+  client.onStateChange(state => {
+    if (leafony === client) updateTable(state);
+  });
+  client.onDisconnected(() => {
+    if (leafony !== client) return;
+    if (connecting) {
+      disconnectedDuringConnect = true;
+      return;
+    }
+    leafony = null;
+    setConnection(false, '接続が切れました');
+    connectionHelp.textContent = '最後に受信した値を表示しています。もう一度接続できます。';
+  });
+  try {
+    await client.connect();
+    if (disconnectedDuringConnect) throw new Error('Disconnected while connecting');
+    setConnection(true, '接続しました。測定値を待っています');
+    connectionHelp.textContent = '測定値が届くまで少しお待ちください。表示されない場合は接続の確認をご覧ください。';
+  } catch (error) {
+    client.disconnect();
+    leafony = null;
+    const cancelled = error.name === 'NotFoundError' || error.name === 'AbortError';
+    setConnection(false, cancelled ? '接続をキャンセルしました' : '接続できませんでした');
+    connectionHelp.textContent = cancelled
+      ? '電源とBluetoothを確認して、もう一度接続できます。'
+      : 'キットの電源、対応ブラウザ、他の画面で接続中でないかを確認してください。';
+  } finally {
+    connecting = false;
+    buttonConnect.disabled = false;
+  }
 });
 
-
-buttonLedMns.addEventListener( 'click', function () {
-
-	console.log( 'LED Minus Button Clicked' );
-	leafony.sendCommand( 'MNS' );
-
+buttonDisconnect.addEventListener('click', () => {
+  const client = leafony;
+  leafony = null;
+  if (client) client.disconnect();
+  setConnection(false, '接続を切りました');
+  connectionHelp.textContent = '最後に受信した値を表示しています。もう一度接続できます。';
 });
 
+async function sendLedCommand(command) {
+  if (!leafony) return;
+  try {
+    await leafony.sendCommand(command);
+  } catch {
+    connectionStatus.textContent = 'LEDの操作を送信できませんでした';
+    connectionHelp.textContent = '接続が続いているか確認してください。必要なら接続し直してください。';
+  }
+}
+buttonLedPls.addEventListener('click', () => sendLedCommand('PLS'));
+buttonLedMns.addEventListener('click', () => sendLedCommand('MNS'));
 
-buttonDownload.addEventListener( 'click', function () {
-
-	let bom_utf_8 = new Uint8Array( [ 0xEF, 0xBB, 0xBF ] );
-	let csvText = "";
-
-	csvText += "Datetime,Device Name,Unique Name,Temp,Humid,Light,Tilt,BattVolt,Dice\n";
-	// Write all received data in savedData
-	for ( var i = 0; i < savedData.length; i++ ) {
-		for ( var j = 0; j < savedData[i].length; j++ ) {
-			csvText += savedData[i][j];
-			if ( j == savedData[i].length - 1 ) csvText += "\n";
-			else csvText += ",";
-		}
-	}
-
-	let blob = new Blob( [ bom_utf_8, csvText ], { "type": "text/csv" } );
-
-	let url = window.URL.createObjectURL( blob );
-
-	let downloader = document.getElementById( "downloader" );
-	downloader.download = "data.csv";
-	downloader.href = url;
-	$( "#downloader" )[0].click();
-
-	delete csvText;
-	delete blob;
+buttonDownload.addEventListener('click', () => {
+  if (!savedData.length) return;
+  const csvCell = value => '"' + String(value ?? '').replaceAll('"', '""') + '"';
+  const csv = 'Datetime,Device Name,Unique Name,Temp,Humid,Light,Tilt,BattVolt,Dice\n' +
+    savedData.map(row => row.map(csvCell).join(',')).join('\n') + '\n';
+  const url = URL.createObjectURL(new Blob(['\uFEFF', csv], {type: 'text/csv;charset=utf-8'}));
+  const downloader = document.getElementById('downloader');
+  downloader.download = 'data.csv';
+  downloader.href = url;
+  downloader.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
 });
+
+if (!navigator.bluetooth || !window.isSecureContext) {
+  buttonConnect.disabled = true;
+  connectionStatus.textContent = 'このブラウザではBluetooth接続を利用できません';
+  connectionHelp.textContent = '対応するChrome、またはiPhone・iPadのBluefyで開いてください。端末ごとの手順は下のガイドで確認できます。';
+}

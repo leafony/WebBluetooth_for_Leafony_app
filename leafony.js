@@ -49,9 +49,12 @@ function Leafony() {
 
             server = await device.gatt.connect();
 
-            connectService( server );
+            await connectService( server );
         } catch ( error ) {
-            console.log( error );
+            if ( device && device.gatt.connected ) {
+                device.gatt.disconnect();
+            }
+            throw error;
         }
 
     }
@@ -219,7 +222,7 @@ function Leafony() {
      */
     async function sendCommand( cmd ) {
 
-        if ( char.write ) {
+        if ( char.write && device && device.gatt.connected ) {
             let ArrayBuffer = new TextEncoder().encode( cmd );
             await char.write.writeValue( ArrayBuffer );
         }
